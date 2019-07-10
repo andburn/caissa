@@ -4,36 +4,86 @@ import cv2 as cv
 import numpy as np
 
 
-# get the input file and convert to grayscale
+# mouse click globals
+points = []
+output_size = 300
+output_dims = np.float32([
+    [0,0],
+    [output_size, 0],
+    [0, output_size],
+    [output_size, output_size]
+    ])
+
+
+# mouse click callback function
+def mouse_click(event, x, y, flags, param):
+    global ui_img
+
+    if event == cv.EVENT_LBUTTONDOWN:
+        cv.circle(ui_img, (x,y), 5, (255,0,0), -1)
+        points.append([x,y])
+
+
+def get_distance(p1, p2):
+    return (p1[0] - p2[0])**2 + (p1[1] - p2[1])**2
+
+
+def find_nearest(points, p):
+    nearest = [0, 0]
+    ndist = -1
+    for pt in points:
+        dist = get_distance(p, pt[0])
+        if ndist < 0 or dist < ndist:
+            ndist = dist
+            nearest = pt
+    return nearest
+
+
+# based on manual corners transform perspective
+def adjust_image(img, mask, points, size):
+    gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
+    # use Harris/Shi-Tomasi corner detector on image
+    corners = cv.goodFeaturesToTrack(gray, 85, 0.04, 8, mask=mask)
+
+    # transform perspective
+    corner_points = []
+    for p in points:
+        corner_points.append(find_nearest(corners, p))
+
+    # show corners
+    for i in corners:
+        x, y = i.ravel()
+        cv.circle(gray, (x,y), 3, 255, -1)
+        for c in corner_points:
+            if x == c[0][0] and y == c[0][1]:
+                cv.circle(gray, (x,y), 3, 0, -1)
+    cv.imwrite('captures/_corners.jpg', gray)
+
+    corner_points = np.float32(corner_points)
+    transform = cv.getPerspectiveTransform(corner_points, output_dims)
+    output = cv.warpPerspective(img, transform, (output_size, output_size))
+    cv.imwrite('captures/_perspective.jpg', output)
+
+
+# read the captured image from file
 img_file = sys.argv[1]
 img = cv.imread(img_file)
-gray = cv.cvtColor(img,cv.COLOR_BGR2GRAY)
+# crop out the known upper area of image
+img = img[210:]
+# read board mask image
+mask = cv.imread('captures/board_mask.jpg', cv.IMREAD_GRAYSCALE)
 
-edges = cv.Canny(gray, 100, 200)
-cv.imwrite('captures/_canny.jpg', edges)
+# show window
+cv.namedWindow('image')
+cv.setMouseCallback('image', mouse_click)
 
-# detect lines using canny edges
-lines = cv.HoughLines(edges, 1, np.pi/180, 180)
+ui_img = img.copy()
+# ui loop
+while(1):
+    cv.imshow('image', ui_img)
+    # close window on ESC
+    if cv.waitKey(20) & 0xFF == 27:
+        adjust_image(img, mask, points, output_size)
+        break
 
-for line in lines:
-    rho,theta = line[0]
-    a = np.cos(theta)
-    b = np.sin(theta)
-    x0 = a*rho
-    y0 = b*rho
-    x1 = int(x0 + 1000*(-b))
-    y1 = int(y0 + 1000*(a))
-    x2 = int(x0 - 1000*(-b))
-    y2 = int(y0 - 1000*(a))
-    cv.line(img, (x1,y1), (x2,y2), (0,0,255), 2)
-
-cv.imwrite('captures/_lines.jpg', img)
-
-# use Harris/Shi-Tomasi corner detector on original grayscale image
-corners = cv.goodFeaturesToTrack(gray, 100, 0.04, 8)
-
-for i in corners:
-    x, y = i.ravel()
-    cv.circle(gray, (x,y), 3, 255, -1)
-
-cv.imwrite('captures/_corners.jpg', gray)
+cv.destroyAllWindows()
